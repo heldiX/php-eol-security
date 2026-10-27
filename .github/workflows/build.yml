@@ -130,10 +130,28 @@ jobs:
           Import-Module "$env:GITHUB_WORKSPACE\builder\php\BuildPhp" -Force
           Invoke-PhpBuild -Arch x64 -Ts nts
 
-      - name: Official PHP smoke tests
+      - name: Official PHP smoke tests (PIA2 extension profile)
         shell: pwsh
         working-directory: ${{ env.SRC_DIR }}
         run: |
+          # The pinned upstream builder requires COM, Enchant and PostgreSQL in
+          # its standard smoke-test baseline, although our build omits them.
+          # Adjust ONLY the required-module list in this ephemeral checkout.
+          # All other upstream checks (php -v / -m / -i) remain unchanged.
+          $moduleList = Join-Path $env:GITHUB_WORKSPACE 'builder/php/BuildPhp/config/smoke_test_modules'
+          $excluded = @('com_dotnet', 'enchant', 'pdo_pgsql', 'pgsql')
+          $baseline = @(Get-Content -LiteralPath $moduleList)
+          foreach ($module in $excluded) {
+            $matches = @($baseline | Where-Object { $_.Trim() -ieq $module })
+            if ($matches.Count -ne 1) {
+              throw "Expected exactly one '$module' in official smoke-test baseline, found $($matches.Count)"
+            }
+          }
+          $remaining = @($baseline | Where-Object { $_.Trim() -notin $excluded })
+          Set-Content -LiteralPath $moduleList -Value $remaining -Encoding ascii
+          Write-Host "PIA2 smoke-test profile: excluded $($excluded -join ', ')"
+          $retainedNames = @($remaining | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+          Write-Host "All other $($retainedNames.Count) official required modules are still checked."
           Import-Module "$env:GITHUB_WORKSPACE\builder\php\BuildPhp" -Force
           Invoke-PhpSmokeTests -ArtifactsDirectory artifacts -Arch x64 -Ts nts
 
@@ -144,7 +162,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $zip = Get-ChildItem 'php-7.4.33-pl2-nts-Win32-*-x64.zip' | Select-Object -First 1
           if (-not $zip) { throw 'NTS x64 ZIP not found' }
-          $dir = Join-Path $env:RUNNER_TEMP 'PIA2-php'
+          $dir = Join-Path $env:RUNNER_TEMP 'pia2-php'
           Expand-Archive $zip.FullName -DestinationPath $dir
           foreach ($required in @('php.exe', 'php-cgi.exe', 'php7.dll')) {
             if (-not (Test-Path (Join-Path $dir $required))) { throw "Missing $required" }
@@ -173,7 +191,7 @@ jobs:
       - name: Upload tested binaries and SBOM
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: PIA2-php-7.4.33-pl2-build
+          name: pia2-php-7.4.33-pl2-build
           path: ${{ env.SRC_DIR }}/artifacts/*
           if-no-files-found: error
           retention-days: 30
@@ -190,7 +208,7 @@ jobs:
       - name: Download tested build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: PIA2-php-7.4.33-pl2-build
+          name: pia2-php-7.4.33-pl2-build
           path: dist
       - name: Create SHA256SUMS
         shell: bash
@@ -208,7 +226,7 @@ jobs:
       - name: Upload ready-to-use package and checksums
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: PIA2-php-7.4.33-pl2-verified
+          name: pia2-php-7.4.33-pl2-verified
           path: dist/*
           if-no-files-found: error
           retention-days: 30
@@ -226,7 +244,7 @@ jobs:
           Built and tested: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           Contains ZIP, SHA256SUMS and available SBOM files. Microsoft SQLSRV PHP drivers are NOT included.
           EOF
-          gh release create "PIA2-php-7.4.33-pl2-run-${GITHUB_RUN_ID}" dist/* \
+          gh release create "pia2-php-7.4.33-pl2-run-${GITHUB_RUN_ID}" dist/* \
             --target "$GITHUB_SHA" \
             --title 'PIA2 PHP 7.4.33-pl2 NTS x64' \
             --notes-file release-notes.md
